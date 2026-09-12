@@ -13,6 +13,10 @@
  * PG_TEST_PASSWORD (empty). The user must be able to CREATE ROLE and CREATE SCHEMA — the
  * suite creates a non-superuser owner role and a non-owner scoped role, because a superuser
  * is never subject to a policy and the assertions would prove nothing.
+ *
+ * The second half of the gate is `failOnEmptyTestSuite="true"` in phpunit.xml: a run that
+ * discovers no tests (a `--filter` that matches nothing, a broken autoload) exits non-zero instead
+ * of reporting "No tests executed" with a green exit code.
  */
 
 require __DIR__.'/../vendor/autoload.php';
