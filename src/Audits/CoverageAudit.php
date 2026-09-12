@@ -10,8 +10,9 @@ use Throwable;
 
 /**
  * **Question:** is every base table in each prepared schema in the state `prepare()` leaves it —
- * RLS enabled (and forced, when `force` is on), the current policy present, the discriminator
- * column present with its default, every unique index carrying the column?
+ * RLS enabled (and forced, when `force` is on; a table forced while `force` is off is strictly
+ * safer and is noted, not failed), the current policy present, the discriminator column present
+ * with its default, every unique index carrying the column?
  *
  * One finding per schema. **Gate-shaped: a Fail is a table that can leak.** A table that shipped
  * without a policy is readable across keys by any scoped connection, which is the defect this map
@@ -76,14 +77,20 @@ final class CoverageAudit implements DoctorAudit
         }
 
         $notes = [];
+        $forced = [];
 
         foreach ($report->tables as $table) {
+            if ($table->forcedBeyondConfig($this->scope->force)) {
+                $forced[] = $table->table;
+            }
+
             foreach ($table->foreignKeyBackedUniqueIndexes as $index) {
                 $notes[] = sprintf('%s.%s (referenced by a foreign key; left unique across keys)', $table->table, $index);
             }
         }
 
         $noteText = $notes === [] ? '' : ' Unique indexes the preparer cannot rewrite: '.implode(', ', $notes).'.';
+        $noteText .= $forced === [] ? '' : sprintf(' %d table(s) are FORCEd although force is off (strictly safer; the owner is subject there): %s.', count($forced), implode(', ', $forced));
 
         if ($report->complete()) {
             return Finding::pass(self::CHECK, sprintf(

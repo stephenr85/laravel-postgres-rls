@@ -26,8 +26,14 @@ use Throwable;
  * **What a Pass does NOT prove.** That the setting is bound on the connection ({@see FrameAudit});
  * that the tables carry a policy ({@see CoverageAudit}); anything about a scoped connection the
  * host assembles at runtime and never lists in `database.connections` — pass those by name in
- * `AuditScope::$scopedConnections`. No scoped connections at all is `inconclusive`. A connection that
- * cannot be opened is a Fail, because an unverified gate is not a passed one.
+ * `AuditScope::$scopedConnections`. No scoped connections at all is `inconclusive`, and so is a role
+ * that is clean on its attributes while no schemas are configured — the ownership half was never
+ * measured. A connection that cannot be opened is a Fail, because an unverified gate is not a
+ * passed one.
+ *
+ * This audit OPENS each scoped connection (a read-only select on `pg_roles` and `pg_tables`),
+ * unlike {@see OwnerExposureAudit}, because which role a connection really authenticates as is not
+ * a config fact — a `url` DSN or role membership is invisible to a string comparison on `username`.
  */
 final class RoleAudit implements DoctorAudit
 {
@@ -82,12 +88,20 @@ final class RoleAudit implements DoctorAudit
             $reasons[] = 'owns table(s) '.implode(', ', $owned['tables']).' (an owner is not subject to the policy unless FORCE is on)';
         }
 
+        if ($reasons === [] && $this->scope->schemas === []) {
+            return Finding::inconclusive(self::CHECK, sprintf(
+                'Scoped connection "%s" authenticates as role "%s": not a superuser, no BYPASSRLS — but ownership was NOT measured, because no prepared schemas are configured (postgres-rls.audits.schemas).',
+                $name,
+                $role['name'],
+            ));
+        }
+
         if ($reasons === []) {
             return Finding::pass(self::CHECK, sprintf(
                 'Scoped connection "%s" authenticates as role "%s": not a superuser, no BYPASSRLS, owns no prepared schema and no table in %s; the policy applies to it.',
                 $name,
                 $role['name'],
-                $this->scope->schemas === [] ? '(no schemas configured)' : implode(', ', $this->scope->schemas),
+                implode(', ', $this->scope->schemas),
             ));
         }
 

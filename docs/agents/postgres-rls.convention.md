@@ -77,9 +77,9 @@ them with no arguments:
 
 | audit | question | shape | a Pass does not prove |
 | --- | --- | --- | --- |
-| `Audits\CoverageAudit` | is every table in each prepared schema in the state `prepare()` leaves it? | **gate** — a Fail is a table that leaks; unreadable connection = Fail | which role reads it; whether the setting is bound; schemas not in scope |
-| `Audits\RoleAudit` | does every scoped connection authenticate as a role the policy binds (not superuser, not `BYPASSRLS`, owns nothing in the schema)? The Pass names the role. | **gate**; unopenable connection = Fail | that the setting is bound; that tables carry a policy; runtime-built connections not listed |
-| `Audits\OwnerExposureAudit` | does any configured connection whose `search_path` reaches a prepared schema authenticate as its owner, outside the declared maintenance connections? | **gate** while any table is unforced; superuser reaching the schema = Warn | runtime-built connections; a `url`-style config's user |
+| `Audits\CoverageAudit` | is every table in each prepared schema in the state `prepare()` leaves it? | **gate** — a Fail is a table that leaks; unreadable connection = Fail; a table FORCEd while `force` is off is safer and is noted, not failed | which role reads it; whether the setting is bound; schemas not in scope |
+| `Audits\RoleAudit` | does every scoped connection authenticate as a role the policy binds (not superuser, not `BYPASSRLS`, owns nothing in the schema)? The Pass names the role. | **gate**; unopenable connection = Fail; clean attributes with no schemas configured = inconclusive (ownership unmeasured) | that the setting is bound; that tables carry a policy; runtime-built connections not listed |
+| `Audits\OwnerExposureAudit` | does any configured connection whose `search_path` reaches a prepared schema authenticate as its owner, outside the declared maintenance connections? | **gate** while any table is unforced; superuser reaching the schema = Warn; no connection reaching the schema = inconclusive | runtime-built connections; a `url`-style config's user or a member of the owner role — it compares the config `username` only, so it can Pass a connection `RoleAudit` would Fail |
 | `Audits\FrameAudit` | on the live session, is the setting bound where it should be and NULL where it should not? The runtime half of the pooler probe. | **advisory** — Warn, never Fail; unopenable = inconclusive | that the value stays bound under a pooler; runtime-built connections |
 
 Every audit reports `Finding::inconclusive()` (a Pass with `conclusive: false`) when its population is
@@ -104,6 +104,15 @@ new DoctorRegistration('rushing/laravel-postgres-rls', RoleAudit::class, gate: t
 new DoctorRegistration('rushing/laravel-postgres-rls', OwnerExposureAudit::class, gate: true);
 new DoctorRegistration('rushing/laravel-postgres-rls', FrameAudit::class);          // advisory
 ```
+
+**Which audits open a connection.** `OwnerExposureAudit` reads config only — the exposure is the
+configured `username`, so config is the honest instrument, and it compares that string with the
+schema owner from `pg_namespace` (a connection with no `search_path` key counts as reaching
+`public`, Laravel's default). `RoleAudit` and `FrameAudit` **do open** each scoped or probe
+connection and run read-only selects (`pg_roles`, `pg_tables`, `current_setting`), because the role
+a connection really authenticates as and the setting on its live session are not config facts: a
+`url` DSN or a membership of the owner role is invisible to a string comparison. `CoverageAudit`
+opens the catalog connection. None of them writes.
 
 A host whose scoped connections exist only at runtime (assembled per request from a key) rebinds
 `Audits\AuditScope` with the connection names it wants measured, or constructs an audit directly with

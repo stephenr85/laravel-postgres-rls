@@ -19,11 +19,18 @@ use Throwable;
  * audits themselves read the catalog through — list it explicitly, so a misdeclared catalog
  * connection cannot exempt itself.
  *
- * Read from config, not by opening the connection: the exposure is in the configuration, and a
- * request-path connection is not something a doctor should open. `username` is compared with the
- * schema owner from `pg_namespace`. When every table in the schema is FORCEd the owner is subject
- * to the policy and the finding is a Pass that says so; a single unforced table makes it a Fail,
- * because that table is readable across keys.
+ * Read from config only — nothing here is opened: the exposure IS the configuration (which user a
+ * request path is told to authenticate as), so config is the honest instrument, and it is the only
+ * audit of the four that stays closed. {@see RoleAudit} and {@see FrameAudit} do open the scoped
+ * connections, with read-only selects, because the role a connection really authenticates as and
+ * the setting on its live session cannot be read from config. The config `username` is compared
+ * with the schema owner from `pg_namespace`; that is a string comparison, so this audit can Pass a
+ * connection RoleAudit would Fail — a `url` DSN whose user is not in `username`, or a role that is a
+ * MEMBER of the owner. A connection with no `search_path` key is taken to reach `public`, which is
+ * what Laravel's connector defaults it to. When every table in the schema is FORCEd the owner is
+ * subject to the policy and the finding is a Pass that says so; a single unforced table makes it a
+ * Fail, because that table is readable across keys. No connection reaching the schema at all is
+ * `inconclusive`: nothing was measured.
  *
  * **What a Pass does NOT prove.** That a connection built at runtime (not in `database.connections`)
  * is safe; that a `url`-style config's user was seen (only `username` is read — the {@see RoleAudit}
@@ -83,7 +90,15 @@ final class OwnerExposureAudit implements DoctorAudit
             }
         }
 
-        $checked = sprintf('%d connection(s) reach schema "%s" outside the maintenance path (%s)', count($reaching), $schema, $reaching === [] ? 'none' : implode(', ', $reaching));
+        if ($reaching === []) {
+            return Finding::inconclusive(self::CHECK, sprintf(
+                'No configured connection reaches schema "%s" outside the maintenance path (%s), so owner exposure was not measured.',
+                $schema,
+                $this->scope->maintenanceConnections === [] ? 'none declared' : 'declared: '.implode(', ', $this->scope->maintenanceConnections),
+            ));
+        }
+
+        $checked = sprintf('%d connection(s) reach schema "%s" outside the maintenance path (%s)', count($reaching), $schema, implode(', ', $reaching));
 
         if ($asOwner !== [] && $unforced !== []) {
             return Finding::fail(self::CHECK, sprintf(

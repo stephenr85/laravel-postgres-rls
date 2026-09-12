@@ -44,8 +44,8 @@ final class TableCoverage
             $problems[] = 'row level security not enabled';
         }
 
-        if ($this->rlsForced !== $expectForced) {
-            $problems[] = $expectForced ? 'row level security not forced' : 'row level security forced but force is off';
+        if ($expectForced && ! $this->rlsForced) {
+            $problems[] = 'row level security not forced';
         }
 
         if (! $this->policyCurrent) {
@@ -57,6 +57,15 @@ final class TableCoverage
         }
 
         return $problems;
+    }
+
+    /**
+     * FORCEd while `force` is off: strictly safer (the owner is subject too), so not a problem —
+     * but worth naming, because an owner connection that expected to read across keys will not.
+     */
+    public function forcedBeyondConfig(bool $expectForced): bool
+    {
+        return $this->rlsForced && ! $expectForced;
     }
 
     public function complete(bool $expectForced): bool

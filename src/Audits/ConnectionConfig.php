@@ -67,8 +67,9 @@ final class ConnectionConfig
     }
 
     /**
-     * The schemas a connection config's `search_path` (or legacy `schema`) names, unquoted.
-     * Mirrors Laravel's own `ParsesSearchPath` shape: a string like `"a", b` or an array.
+     * The schemas a connection config's `search_path` (or legacy `schema`) names, unquoted;
+     * `['public']` when the key is absent. Mirrors Laravel's own `ParsesSearchPath` shape: a
+     * string like `"a", b` or an array.
      *
      * @param  array<string, mixed>  $config
      * @return list<string>
@@ -77,8 +78,10 @@ final class ConnectionConfig
     {
         $raw = $config['search_path'] ?? $config['schema'] ?? null;
 
+        // Laravel's PostgresConnector sets no search_path when the key is absent, so the session
+        // keeps Postgres's default `"$user", public` — the connection reaches `public`.
         if ($raw === null || $raw === '' || $raw === []) {
-            return [];
+            return ['public'];
         }
 
         $parts = is_array($raw) ? $raw : preg_split('/[\s,]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY);

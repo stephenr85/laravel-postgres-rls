@@ -68,6 +68,19 @@ class RoleAuditTest extends AuditTestCase
         $this->assertFinding(DoctorStatus::Fail, 'Could not open scoped connection "key_ghost"', $this->audit(['key_ghost'])->run()[0]);
     }
 
+    public function test_a_clean_role_with_no_schemas_configured_is_inconclusive_on_ownership(): void
+    {
+        $audit = new RoleAudit($this->app['db'], $this->scope(scoped: ['key_a'], schemas: []), $this->connections());
+
+        $finding = $audit->run()[0];
+
+        $this->assertFinding(DoctorStatus::Pass, 'ownership was NOT measured', $finding, conclusive: false);
+        $this->assertStringContainsString('role "pgrls_test_scoped": not a superuser, no BYPASSRLS', $finding->detail);
+
+        $this->admin()->unprepared(sprintf('ALTER ROLE "%s" BYPASSRLS', self::SCOPED_ROLE));
+        $this->assertFinding(DoctorStatus::Fail, 'holds BYPASSRLS', $audit->run()[0]);
+    }
+
     public function test_no_scoped_connection_is_inconclusive(): void
     {
         $this->assertFinding(DoctorStatus::Pass, 'No connection carries session_settings', $this->audit([])->run()[0], conclusive: false);

@@ -50,9 +50,13 @@ class CoverageTest extends TestCase
         $owner->unprepared('ALTER TABLE posts ENABLE ROW LEVEL SECURITY');
 
         $owner->unprepared('ALTER TABLE posts FORCE ROW LEVEL SECURITY');
-        $this->assertSame(['row level security forced but force is off'], $this->coverage()->probe()->table('posts')->problems(false));
+        $forced = $this->coverage()->probe();
+        $this->assertSame([], $forced->table('posts')->problems(false), 'forced beyond config is safer, not a problem');
+        $this->assertTrue($forced->table('posts')->forcedBeyondConfig(false));
+        $this->assertStringContainsString('FORCEd although force is off', (string) $forced);
         $this->assertSame([], $this->coverage(force: true)->probe()->table('posts')->problems(true));
         $owner->unprepared('ALTER TABLE posts NO FORCE ROW LEVEL SECURITY');
+        $this->assertSame(['row level security not forced'], $this->coverage(force: true)->probe()->table('posts')->problems(true));
 
         $current = Policy::name('posts', 'tenant_id', 'app.tenant_id');
         $owner->unprepared(sprintf('DROP POLICY "%s" ON posts', $current));

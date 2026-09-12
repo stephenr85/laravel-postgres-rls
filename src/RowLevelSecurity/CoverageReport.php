@@ -57,6 +57,10 @@ final class CoverageReport implements Stringable
             $problems = $table->problems($this->expectForced);
             $lines[] = sprintf('  %s: %s', $table->table, $problems === [] ? 'covered' : implode('; ', $problems));
 
+            if ($table->forcedBeyondConfig($this->expectForced)) {
+                $lines[] = '    note: row level security is FORCEd although force is off; the owner is subject to the policy here';
+            }
+
             foreach ($table->foreignKeyBackedUniqueIndexes as $index) {
                 $lines[] = sprintf('    note: unique index %s lacks the column but backs a foreign key; left as is', $index);
             }

@@ -66,7 +66,13 @@ class CoverageAuditTest extends AuditTestCase
         $this->preparer(force: true)->prepare();
 
         $this->assertFinding(DoctorStatus::Pass, 'enabled and forced', $this->audit(force: true)->run()[0]);
-        $this->assertFinding(DoctorStatus::Fail, 'forced but force is off', $this->audit(force: false)->run()[0]);
+
+        $safer = $this->audit(force: false)->run()[0];
+        $this->assertFinding(DoctorStatus::Pass, '2 table(s) are FORCEd although force is off (strictly safer', $safer);
+        $this->assertStringContainsString('comments, posts', $safer->detail);
+
+        $this->owner()->unprepared('ALTER TABLE posts NO FORCE ROW LEVEL SECURITY');
+        $this->assertFinding(DoctorStatus::Fail, 'posts: row level security not forced', $this->audit(force: true)->run()[0]);
     }
 
     public function test_a_foreign_key_backed_unique_index_is_noted_not_failed(): void
