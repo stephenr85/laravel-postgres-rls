@@ -5,6 +5,8 @@ Postgres-only test posture) and the `README.md` (guarantees, non-guarantees, pri
 machinery is documented on the classes themselves: `RowLevelSecurity\SchemaPreparer` for the order
 of operations and the migration window, `RowLevelSecurity\Policy` for the body and the hashed name,
 `RowLevelSecurity\RoleGrants` for why a scoped connection needs a role that owns nothing, and
-`RowLevelSecurity\Coverage` for what the read-only probe reads. Audit conventions (how a host's
-doctor consumes `Coverage`, the role audit that catches a superuser app connection) are written
-against this package by its consumers and will be pointed to from here when they land.
+`RowLevelSecurity\Coverage` for what the read-only probe reads.
+
+- [`postgres-rls.convention.md`](postgres-rls.convention.md) — the guarantees, the three
+  non-guarantees, the privilege model, and how a host registers and reads the four doctor audits
+  (`Audits\CoverageAudit`, `RoleAudit`, `OwnerExposureAudit`, `FrameAudit`).

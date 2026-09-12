@@ -45,6 +45,21 @@ Plus `postgres-rls:prepare {schema}` (options `--connection`, `--column`, `--set
 `--exclude=*`, `--force`) and a publishable `config/postgres-rls.php` holding the defaults:
 column `tenant_id`, setting `app.tenant_id`, exclude `['migrations']`, force `false`.
 
+### Doctor audits
+
+Four `Rushing\Doctor\DoctorAudit` implementations under `Audits\`, bound by the provider from the
+`audits` block of the config so a host's doctor manifest registers them by class:
+
+| audit | Fails when | shape |
+| --- | --- | --- |
+| `CoverageAudit` | a table in a prepared schema lacks the column, RLS, the current policy, or a rewritable unique index lacks the column | gate |
+| `RoleAudit` | a connection carrying `session_settings` authenticates as a superuser, a `BYPASSRLS` role, or an owner of the schema or a table in it — the Pass names the role | gate |
+| `OwnerExposureAudit` | a configured connection whose `search_path` reaches a prepared schema authenticates as its owner outside `maintenance_connections`, while any table is unforced | gate |
+| `FrameAudit` | (advisory, Warns) the setting is not bound on a live scoped session, is stale, or is bound on an unscoped one | advisory |
+
+An empty population is `inconclusive`, never clean. The convention page below says what each Pass
+does not prove and how a host wires them.
+
 ### Policy names carry a hash
 
 A policy is named `{table}_rls_policy_{sha1(body)[:6]}`. Change the column or the setting and the
@@ -132,8 +147,8 @@ composer require rushing/laravel-postgres-rls
 php artisan vendor:publish --tag=postgres-rls-config   # optional
 ```
 
-Requires PHP ^8.2 and `illuminate/database` ^11|^12|^13. No tenancy framework, no product
-package. The provider is auto-discovered; it binds the connector only when `db.connector.pgsql`
+Requires PHP ^8.2, `illuminate/database` ^11|^12|^13 and `rushing/laravel-doctor` (the Pass/Warn/Fail
+vocabulary the audits report in). No tenancy framework, no product package. The provider is auto-discovered; it binds the connector only when `db.connector.pgsql`
 is unbound. `tpetry/laravel-postgresql-enhanced` overrides the *Connection* class
 (`Connection::resolverFor('pgsql')`), not the connector, so both coexist — measured 2026-09-12.
 
@@ -150,6 +165,8 @@ connector should extend this one or call its `applySessionSettings()` from their
 - Class docblocks carry the machinery: `SchemaPreparer` (order of operations, the three-step
   column add, the migration window), `Policy` (body, naming, hashing), `RoleGrants` (why a
   separate role), `Coverage` (what is read).
+- [`docs/agents/postgres-rls.convention.md`](docs/agents/postgres-rls.convention.md) — the
+  guarantees, the three non-guarantees, the privilege model, and how a host runs the audits.
 - `docs/agents/` — orientation for agents working in or through this package.
 
 ## License

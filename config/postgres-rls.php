@@ -32,4 +32,27 @@ return [
      */
     'force' => false,
 
+    /*
+     * What the doctor audits (Rushing\PostgresRls\Audits\*) are pointed at. A host whose scoped
+     * connections are assembled at runtime constructs an AuditScope by hand instead.
+     */
+    'audits' => [
+
+        // Prepared schemas to audit. Empty = every audit reports inconclusive.
+        'schemas' => [],
+
+        // Connection the CoverageAudit and OwnerExposureAudit read the catalog through (the owner
+        // or a superuser). null = the default connection.
+        'connection' => null,
+
+        // Connections expected to carry session_settings. null = every pgsql entry in
+        // database.connections that does.
+        'scoped_connections' => null,
+
+        // Connections allowed to authenticate as a schema owner: the migration path. Nothing else
+        // is exempt from the OwnerExposureAudit, including 'connection' above.
+        'maintenance_connections' => [],
+
+    ],
+
 ];

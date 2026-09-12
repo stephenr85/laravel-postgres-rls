@@ -209,6 +209,75 @@ final class Catalog
         return array_map(fn ($row) => $row->expr, $rows);
     }
 
+    /**
+     * The role the connection authenticates as, as Postgres sees it.
+     *
+     * @return array{name: string, superuser: bool, bypassrls: bool}
+     */
+    public function currentRole(): array
+    {
+        $row = $this->connection->selectOne('select rolname, rolsuper, rolbypassrls from pg_roles where rolname = current_user');
+
+        return [
+            'name' => (string) $row->rolname,
+            'superuser' => (bool) $row->rolsuper,
+            'bypassrls' => (bool) $row->rolbypassrls,
+        ];
+    }
+
+    /**
+     * Schemas and tables among `$schemas` that `$role` owns.
+     *
+     * @param  list<string>  $schemas
+     * @return array{schemas: list<string>, tables: list<string>}
+     */
+    public function ownedIn(string $role, array $schemas): array
+    {
+        if ($schemas === []) {
+            return ['schemas' => [], 'tables' => []];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($schemas), '?'));
+
+        $ownedSchemas = $this->connection->select(
+            "select nspname from pg_namespace where pg_get_userbyid(nspowner) = ? and nspname in ($placeholders) order by nspname",
+            [$role, ...$schemas]
+        );
+        $ownedTables = $this->connection->select(
+            "select schemaname || '.' || tablename as name from pg_tables where tableowner = ? and schemaname in ($placeholders) order by 1",
+            [$role, ...$schemas]
+        );
+
+        return [
+            'schemas' => array_map(fn ($row) => $row->nspname, $ownedSchemas),
+            'tables' => array_map(fn ($row) => $row->name, $ownedTables),
+        ];
+    }
+
+    /**
+     * Tables in scope whose row security is not FORCEd — where the owner reads every row.
+     *
+     * @param  list<string>  $exclude
+     * @return list<string>
+     */
+    public function unforcedTables(string $schema, array $exclude = []): array
+    {
+        $rows = $this->connection->select(
+            "select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = ? and c.relkind in ('r', 'p') and not c.relforcerowsecurity order by c.relname",
+            [$schema]
+        );
+
+        return array_values(array_diff(array_map(fn ($row) => $row->relname, $rows), $exclude));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function superusers(): array
+    {
+        return array_map(fn ($row) => $row->rolname, $this->connection->select('select rolname from pg_roles where rolsuper order by rolname'));
+    }
+
     public function schemaOwner(string $schema): ?string
     {
         $row = $this->connection->selectOne(

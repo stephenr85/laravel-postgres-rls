@@ -3,12 +3,19 @@
 namespace Rushing\PostgresRls;
 
 use Illuminate\Support\ServiceProvider;
+use Rushing\PostgresRls\Audits\AuditScope;
+use Rushing\PostgresRls\Audits\ConnectionConfig;
+use Rushing\PostgresRls\Audits\CoverageAudit;
+use Rushing\PostgresRls\Audits\FrameAudit;
+use Rushing\PostgresRls\Audits\OwnerExposureAudit;
+use Rushing\PostgresRls\Audits\RoleAudit;
 use Rushing\PostgresRls\Console\PrepareCommand;
 
 /**
  * Binds {@see SessionSettingsPostgresConnector} at the container key Laravel's
  * `ConnectionFactory` consults before falling back to its own connector
- * (`db.connector.pgsql`), merges the package config, and registers the prepare command.
+ * (`db.connector.pgsql`), merges the package config, registers the prepare command, and binds
+ * the four doctor audits with their config-derived scope.
  *
  * The connector is bound ONLY when nothing else has claimed the key, so a host that already
  * ships its own pgsql connector keeps it; wrap or extend this class there instead.
@@ -30,6 +37,25 @@ class PostgresRlsServiceProvider extends ServiceProvider
 
         if (! $this->app->bound(self::CONNECTOR_KEY)) {
             $this->app->bind(self::CONNECTOR_KEY, SessionSettingsPostgresConnector::class);
+        }
+
+        $this->bindAudits();
+    }
+
+    /**
+     * The audits resolve from the container with no arguments (that is the {@see \Rushing\Doctor\DoctorAudit}
+     * contract a host's doctor manifest relies on), so their scope comes from config here. A host
+     * whose scoped connections exist only at runtime rebinds AuditScope, or the audit, with its own.
+     */
+    protected function bindAudits(): void
+    {
+        $this->app->bind(AuditScope::class, fn ($app) => AuditScope::fromConfig((array) $app['config']->get('postgres-rls', [])));
+        $this->app->bind(ConnectionConfig::class, fn ($app) => new ConnectionConfig((array) $app['config']->get('database.connections', [])));
+
+        $this->app->bind(CoverageAudit::class, fn ($app) => new CoverageAudit($app['db'], $app->make(AuditScope::class)));
+
+        foreach ([RoleAudit::class, OwnerExposureAudit::class, FrameAudit::class] as $audit) {
+            $this->app->bind($audit, fn ($app) => new $audit($app['db'], $app->make(AuditScope::class), $app->make(ConnectionConfig::class)));
         }
     }
 

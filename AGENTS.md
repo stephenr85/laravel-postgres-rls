@@ -1,7 +1,8 @@
 > You are in **rushing/laravel-postgres-rls** — Postgres row-level security keyed by a session setting: a pgsql connector that applies `session_settings` on every connect and reconnect, a schema preparer that adds a defaulted discriminator column, enables RLS and installs a hashed policy on every table in a schema, a read-only coverage probe, and role grants for the non-owner connection.
 
-Foundation-vendor: requires `illuminate/*` only. No tenancy framework, no `splicewire/*`, no
-`schemastud/*` (declared in `composer.json` `extra.package-topology`). Host vocabulary stays out of
+Foundation-vendor: requires `illuminate/*` and `rushing/laravel-doctor` only. No tenancy framework,
+no `splicewire/*`, no `schemastud/*` (declared in `composer.json` `extra.package-topology` and
+enforced by `tests/TopologySeamGuardTest.php`). Host vocabulary stays out of
 `src/`: this package says *key*, *discriminator*, *setting*, *schema*, *owner role*, *scoped role*.
 The default column name `tenant_id` and setting `app.tenant_id` are config values, not vocabulary.
 
@@ -27,6 +28,10 @@ Three facts the code depends on, each with a test:
 ## Where things go
 
 - Mechanism and its reasons: class docblocks (`SchemaPreparer`, `Policy`, `RoleGrants`, `Coverage`,
-  `SessionSettingsPostgresConnector`). Guarantees, non-guarantees and the privilege model: `README.md`.
-- Agent orientation pages: `docs/agents/`.
+  `SessionSettingsPostgresConnector`, and each `Audits\*Audit` — every audit's docblock states the
+  question it answers and what a Pass does NOT prove). Guarantees, non-guarantees, the privilege
+  model and how a host runs the audits: `docs/agents/postgres-rls.convention.md`; `README.md` summarises.
+- Audits are gate-shaped (Coverage, Role, OwnerExposure: an unreadable population is a Fail) except
+  `FrameAudit`, which is advisory and never Fails. Do not change a shape without changing the
+  convention page in the same commit.
 - Formatting: `composer pint` before every commit.
