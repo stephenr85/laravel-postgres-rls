@@ -314,6 +314,14 @@ class SchemaPreparerTest extends TestCase
         new SchemaPreparer($this->owner(), self::SCHEMA, 'Tenant Id');
     }
 
+    public function test_the_column_must_fit_a_postgres_identifier(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('at most 63 bytes');
+
+        new SchemaPreparer($this->owner(), self::SCHEMA, str_repeat('c', 64));
+    }
+
     public function test_from_config_applies_overrides_over_config_over_defaults(): void
     {
         $this->createSpikeTables();

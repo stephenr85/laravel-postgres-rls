@@ -120,8 +120,10 @@ PG_TEST_DATABASE=test_pgrls composer test
 Optional: `PG_TEST_HOST` (127.0.0.1), `PG_TEST_PORT` (5432), `PG_TEST_USERNAME` (postgres),
 `PG_TEST_PASSWORD` (empty). The user must be able to `CREATE ROLE` and `CREATE SCHEMA`: every test
 builds a fresh schema owned by a non-superuser role (`pgrls_test_owner`) and connects as a non-owner
-role (`pgrls_test_scoped`) under two keys and under none, then drops both roles. Use a throwaway,
-session-scoped database rather than a shared one — concurrent runs would reset each other's schema.
+role (`pgrls_test_scoped`) under two keys and under none, then drops both roles. Point it at a
+throwaway, session-scoped database (the isolated-test-db pattern: one database per session, created
+before the run and dropped after) rather than a shared one — two concurrent runs would reset each
+other's schema, and `phpunit.xml` sets `failOnEmptyTestSuite` so a run that reaches no test is red.
 
 ## Install
 
@@ -134,6 +136,14 @@ Requires PHP ^8.2 and `illuminate/database` ^11|^12|^13. No tenancy framework, n
 package. The provider is auto-discovered; it binds the connector only when `db.connector.pgsql`
 is unbound. `tpetry/laravel-postgresql-enhanced` overrides the *Connection* class
 (`Connection::resolverFor('pgsql')`), not the connector, so both coexist — measured 2026-09-12.
+
+That guard is **fail-open by design**: if another package already holds `db.connector.pgsql`, this
+connector is not installed and `session_settings` are silently not applied — every scoped connection
+then reads zero rows (the policy is fail-closed) rather than the wrong rows, but nothing says why.
+`Coverage` cannot detect it; it reads the schema, not the container. Check the binding instead:
+`app('db.connector.pgsql') instanceof Rushing\PostgresRls\SessionSettingsPostgresConnector`, or
+`select current_setting('app.tenant_id', true)` on a scoped connection. A host that ships its own
+connector should extend this one or call its `applySessionSettings()` from theirs.
 
 ## Documentation
 

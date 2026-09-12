@@ -16,6 +16,8 @@ final class Identifier
 {
     private const PLAIN = '/^[a-z_][a-z0-9_]*$/';
 
+    private const MAX_IDENTIFIER = 63;
+
     public static function quote(string $identifier): string
     {
         return '"'.str_replace('"', '""', $identifier).'"';
@@ -40,6 +42,17 @@ final class Identifier
             ));
         }
 
+        // Postgres truncates a longer identifier silently; the catalog would then never report
+        // the name the preparer asked for, and prepare() would stop being idempotent.
+        if (strlen($column) > self::MAX_IDENTIFIER) {
+            throw new InvalidArgumentException(sprintf(
+                'The discriminator column must be at most %d bytes; "%s" is %d.',
+                self::MAX_IDENTIFIER,
+                $column,
+                strlen($column)
+            ));
+        }
+
         return $column;
     }
 
@@ -61,7 +74,7 @@ final class Identifier
 
     public static function assertSchema(string $schema): string
     {
-        if ($schema === '' || strlen($schema) > 63) {
+        if ($schema === '' || strlen($schema) > self::MAX_IDENTIFIER) {
             throw new InvalidArgumentException('A schema name must be between 1 and 63 characters.');
         }
 

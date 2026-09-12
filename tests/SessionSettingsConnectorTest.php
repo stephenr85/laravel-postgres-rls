@@ -43,6 +43,17 @@ class SessionSettingsConnectorTest extends TestCase
         $this->assertSame('a', $this->currentSetting($connection));
     }
 
+    public function test_the_setting_is_reapplied_on_a_fresh_connection_after_purge(): void
+    {
+        $before = spl_object_id($this->scoped('a'));
+
+        DB::purge('key_a');
+        $connection = $this->scoped('a');
+
+        $this->assertNotSame($before, spl_object_id($connection), 'purge() must resolve a new Connection for this to prove anything');
+        $this->assertSame('a', $this->currentSetting($connection));
+    }
+
     public function test_the_setting_is_session_scoped_and_survives_transactions(): void
     {
         $connection = $this->scoped('a');
