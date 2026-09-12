@@ -1,7 +1,15 @@
 {
     "name": "rushing/laravel-postgres-rls",
     "description": "Postgres row-level security keyed by a session setting: a pgsql connector that applies `session_settings` on every connect and reconnect, a schema preparer that adds a defaulted discriminator column, enables RLS and installs a hashed policy on every table in a schema, a read-only coverage probe, and role grants for the non-owner connection. Host-vocabulary-free; no tenancy framework required.",
-    "keywords": ["laravel", "postgres", "postgresql", "row-level-security", "rls", "multi-tenant", "session-settings"],
+    "keywords": [
+        "laravel",
+        "postgres",
+        "postgresql",
+        "row-level-security",
+        "rls",
+        "multi-tenant",
+        "session-settings"
+    ],
     "license": "MIT",
     "authors": [
         {
@@ -13,7 +21,8 @@
         "php": "^8.2",
         "illuminate/console": "^11.0|^12.0|^13.0",
         "illuminate/database": "^11.0|^12.0|^13.0",
-        "illuminate/support": "^11.0|^12.0|^13.0"
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "rushing/laravel-doctor": "dev-main"
     },
     "require-dev": {
         "laravel/pint": "^1.0",
@@ -38,6 +47,9 @@
         },
         "package-topology": {
             "because": "A foundation package: the RLS mechanism must be consumable by any host that wants a session setting on a connection, so it requires nothing from the product tiers and nothing from a tenancy framework. The splicewire/laravel-beam-tenancy adapter depends on this package, never the reverse.",
+            "mustRequire": [
+                "rushing/laravel-doctor"
+            ],
             "mustNotRequire": [
                 "splicewire/*",
                 "schemastud/*",
@@ -59,5 +71,14 @@
     "scripts": {
         "pint": "@php -d memory_limit=512M vendor/bin/pint",
         "test": "@php vendor/bin/phpunit"
-    }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../laravel-doctor",
+            "options": {
+                "symlink": true
+            }
+        }
+    ]
 }
