@@ -40,6 +40,7 @@ Four pieces, each usable alone:
 | `RowLevelSecurity\SchemaPreparer` | for every base table in a schema: adds the discriminator column (`text NOT NULL DEFAULT current_setting('app.tenant_id')`), a btree index on it, `ENABLE ROW LEVEL SECURITY` (and `FORCE` when configured), the policy `USING (col = current_setting('setting', true)) WITH CHECK (same)`, and rewrites unique indexes to lead with the column. Idempotent; a second run reports zero applied statements. Everything runs in one transaction. |
 | `RowLevelSecurity\Coverage` | read-only: per table, is RLS enabled, forced as expected, the current policy present, the column present with its default, every unique index covered. `complete(): bool` for a doctor or a post-migrate gate. |
 | `RowLevelSecurity\RoleGrants` | grants a named non-owner role `USAGE` on the schema, DML on all tables, `USAGE, SELECT` on all sequences, and the same as default privileges for tables and sequences the owner creates later. Never creates the role or sets a password. |
+| `RowLevelSecurity\RoleBinder` | direct access: issues a login role whose default session setting is one key (`ALTER ROLE ... SET`), grants it through `RoleGrants`, and revokes and drops it again. A BI tool connecting as that role sees one key's rows under the same policy with no application in the path. The password is handed out once and never stored or echoed. |
 
 Plus `postgres-rls:prepare {schema}` (options `--connection`, `--column`, `--setting`,
 `--exclude=*`, `--force`) and a publishable `config/postgres-rls.php` holding the defaults:

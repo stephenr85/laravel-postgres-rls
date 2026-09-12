@@ -278,6 +278,11 @@ final class Catalog
         return array_map(fn ($row) => $row->rolname, $this->connection->select('select rolname from pg_roles where rolsuper order by rolname'));
     }
 
+    public function roleExists(string $role): bool
+    {
+        return $this->connection->selectOne('select 1 as present from pg_roles where rolname = ?', [$role]) !== null;
+    }
+
     public function schemaOwner(string $schema): ?string
     {
         $row = $this->connection->selectOne(

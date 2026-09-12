@@ -120,6 +120,36 @@ its own scope and `Audits\ConnectionConfig`. The catalog connection named in `co
 exempt from `OwnerExposureAudit` unless it is also listed in `maintenance_connections` — a misdeclared
 catalog connection must not exempt itself.
 
+## Direct access: a role per key
+
+`RowLevelSecurity\RoleBinder` issues a login role whose **default session setting is one key**
+(`ALTER ROLE ... SET app.tenant_id = '<key>'`), grants it the schema through `RoleGrants`, and later
+revokes and drops it:
+
+```php
+$binder = new RoleBinder(DB::connection('pool_owner'), schema: 'pool');
+$binder->bind('pool_acme', 'app.tenant_id', 'acme', password: $oneTimeSecret);
+$binder->unbind('pool_acme');
+```
+
+**What it is for.** A BI tool, a psql session, a reporting job — anything that connects to Postgres
+with no application in the path. Postgres applies a role's `SET` defaults at session start, before
+the first statement, so a connection as `pool_acme` carries the setting with no `session_settings`,
+no connector and no code, and the same policy scopes it: it reads only `acme`'s rows and every
+insert is stamped `acme`. Both `bind()` and `unbind()` are idempotent; a second bind re-asserts the
+key and grants (and rotates the password when one is given), a second unbind returns an empty list.
+
+**What it does not do.** It never stores the password and never echoes it — the returned statement
+list is redacted. The host hands the credential out once and keeps, at most, the role name. It
+never creates a role that bypasses the policy: the role owns nothing, so it is subject to every
+policy in the schema, and the `RoleAudit` would fail it if it were not. And it does not protect
+against a role holding privileges in another database or owning objects; `DROP ROLE` then fails
+with Postgres's own error, which is correct — this package did not create that state.
+
+Run it as a role with `CREATEROLE` that owns the schema or is a member of the owner. Managed
+Postgres grants its default user `CREATEROLE` without `SUPERUSER`, which is enough; `BYPASSRLS` is
+never needed.
+
 ## What the suite proves, and where
 
 Every guarantee above is a test on real Postgres (`tests/`), every non-guarantee is either measured in

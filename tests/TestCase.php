@@ -32,6 +32,9 @@ abstract class TestCase extends Orchestra
 
     public const SCOPED_ROLE = 'pgrls_test_scoped';
 
+    /** Issued by RoleBinder in its tests; dropped in tearDown if a test left it behind. */
+    public const DIRECT_ROLE = 'pgrls_test_direct';
+
     public const SETTING = 'app.tenant_id';
 
     protected function getPackageProviders($app): array
@@ -100,11 +103,17 @@ abstract class TestCase extends Orchestra
 
     protected function tearDown(): void
     {
-        foreach (['owner', 'key_a', 'key_b', 'unset'] as $name) {
+        foreach (['owner', 'key_a', 'key_b', 'unset', 'direct'] as $name) {
             DB::purge($name);
         }
 
         $admin = $this->admin();
+        $admin->unprepared(sprintf(
+            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '%s') THEN EXECUTE 'DROP OWNED BY \"%s\"'; EXECUTE 'DROP ROLE \"%s\"'; END IF; END $$",
+            self::DIRECT_ROLE,
+            self::DIRECT_ROLE,
+            self::DIRECT_ROLE,
+        ));
         $admin->unprepared(sprintf('DROP SCHEMA IF EXISTS "%s" CASCADE', self::SCHEMA));
         $admin->unprepared(sprintf('DROP OWNED BY "%s", "%s"', self::OWNER_ROLE, self::SCOPED_ROLE));
         $admin->unprepared(sprintf('DROP ROLE IF EXISTS "%s", "%s"', self::OWNER_ROLE, self::SCOPED_ROLE));

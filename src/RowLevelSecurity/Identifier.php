@@ -80,4 +80,30 @@ final class Identifier
 
         return $schema;
     }
+
+    /**
+     * A role name that is safe to interpolate into `CREATE ROLE`/`ALTER ROLE` DDL — the same plain
+     * identifier restriction as {@see assertColumn()}, since role DDL (unlike a table/schema name)
+     * takes no bind parameters at all: `CREATE ROLE $1` is not valid SQL.
+     */
+    public static function assertRole(string $role): string
+    {
+        if (! preg_match(self::PLAIN, $role)) {
+            throw new InvalidArgumentException(sprintf(
+                'A role name must be a plain lower-case identifier (letters, digits, underscore); "%s" given.',
+                $role
+            ));
+        }
+
+        if (strlen($role) > self::MAX_IDENTIFIER) {
+            throw new InvalidArgumentException(sprintf(
+                'A role name must be at most %d bytes; "%s" is %d.',
+                self::MAX_IDENTIFIER,
+                $role,
+                strlen($role)
+            ));
+        }
+
+        return $role;
+    }
 }
