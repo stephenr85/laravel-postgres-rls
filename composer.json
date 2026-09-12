@@ -1,0 +1,63 @@
+{
+    "name": "rushing/laravel-postgres-rls",
+    "description": "Postgres row-level security keyed by a session setting: a pgsql connector that applies `session_settings` on every connect and reconnect, a schema preparer that adds a defaulted discriminator column, enables RLS and installs a hashed policy on every table in a schema, a read-only coverage probe, and role grants for the non-owner connection. Host-vocabulary-free; no tenancy framework required.",
+    "keywords": ["laravel", "postgres", "postgresql", "row-level-security", "rls", "multi-tenant", "session-settings"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Stephen Rushing",
+            "email": "stephenr85@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/database": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rushing\\PostgresRls\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Rushing\\PostgresRls\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Rushing\\PostgresRls\\PostgresRlsServiceProvider"
+            ]
+        },
+        "package-topology": {
+            "because": "A foundation package: the RLS mechanism must be consumable by any host that wants a session setting on a connection, so it requires nothing from the product tiers and nothing from a tenancy framework. The splicewire/laravel-beam-tenancy adapter depends on this package, never the reverse.",
+            "mustNotRequire": [
+                "splicewire/*",
+                "schemastud/*",
+                "stancl/*"
+            ],
+            "neverReaches": [],
+            "sourceNeverReferences": [
+                "Splicewire\\",
+                "Schemastud\\",
+                "Stancl\\"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "scripts": {
+        "pint": "@php -d memory_limit=512M vendor/bin/pint",
+        "test": "@php vendor/bin/phpunit"
+    }
+}
