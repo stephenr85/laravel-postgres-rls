@@ -21,6 +21,11 @@ use InvalidArgumentException;
  *
  * Run it as the schema owner or a superuser: `ALTER DEFAULT PRIVILEGES FOR ROLE x` is only
  * allowed to members of `x`.
+ *
+ * `$defaultsFor` names the role whose FUTURE tables and sequences inherit the grants; null means the
+ * schema's owner. Pass the role that actually runs migrations when that is not the owner — on Postgres 15+
+ * `public` is owned by `pg_database_owner`, and default privileges for that role never fire for tables a
+ * login role creates.
  */
 final class RoleGrants
 {
@@ -29,6 +34,7 @@ final class RoleGrants
     public function __construct(
         private readonly Connection $connection,
         private readonly string $schema,
+        private readonly ?string $defaultsFor = null,
     ) {
         Identifier::assertSchema($schema);
 
@@ -48,7 +54,7 @@ final class RoleGrants
 
         $schema = Identifier::quote($this->schema);
         $grantee = Identifier::quote($role);
-        $forOwner = Identifier::quote($owner);
+        $forOwner = Identifier::quote($this->defaultsFor ?? $owner);
 
         $statements = [
             sprintf('GRANT USAGE ON SCHEMA %s TO %s', $schema, $grantee),

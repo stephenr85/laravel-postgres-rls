@@ -3,6 +3,7 @@
 namespace Rushing\PostgresRls\Tests;
 
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Rushing\PostgresRls\RowLevelSecurity\RoleGrants;
 
@@ -44,6 +45,24 @@ class RoleGrantsTest extends TestCase
         $this->scoped('a')->table('later')->insert(['name' => 'x']);
         $this->assertSame(1, $this->scoped('a')->table('later')->count());
         $this->assertSame(0, $this->scoped('b')->table('later')->count());
+    }
+
+    public function test_defaults_can_follow_the_role_that_creates_tables_rather_than_the_schema_owner(): void
+    {
+        // Postgres 15+ `public` shape: the schema belongs to someone else, a login role runs the migrations.
+        $admin = $this->admin();
+        $admin->unprepared('DROP SCHEMA IF EXISTS rls_shared CASCADE; CREATE SCHEMA rls_shared; GRANT USAGE, CREATE ON SCHEMA rls_shared TO '.self::OWNER_ROLE);
+
+        try {
+            (new RoleGrants($admin, 'rls_shared', defaultsFor: self::OWNER_ROLE))->grant(self::SCOPED_ROLE);
+            $this->owner()->unprepared('CREATE TABLE rls_shared.created_later (id serial PRIMARY KEY, name text)');
+
+            $this->scoped('a')->table('rls_shared.created_later')->insert(['name' => 'x']);
+            $this->assertSame(1, $this->scoped('a')->table('rls_shared.created_later')->count());
+        } finally {
+            DB::purge('key_a');
+            $admin->unprepared('DROP SCHEMA IF EXISTS rls_shared CASCADE');
+        }
     }
 
     public function test_an_unknown_schema_is_refused(): void
