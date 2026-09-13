@@ -132,27 +132,146 @@ class SchemaPreparerTest extends TestCase
         $this->scoped('a')->table('tags')->insert(['name' => 'x']);
     }
 
-    public function test_a_unique_index_backing_a_foreign_key_is_skipped_and_reported(): void
+    public function test_primary_keys_and_the_foreign_keys_between_prepared_tables_lead_with_the_column(): void
     {
         $this->owner()->unprepared(<<<'SQL'
-            CREATE TABLE authors (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text NOT NULL UNIQUE);
-            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_email text NOT NULL REFERENCES authors(email));
+            CREATE TABLE authors (id uuid PRIMARY KEY, email text NOT NULL UNIQUE);
+            CREATE TABLE books (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                author_id uuid NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
+                author_email text REFERENCES authors(email) ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED
+            );
+            CREATE TABLE reviews (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                book_id uuid REFERENCES books(id) ON DELETE SET NULL
+            );
+            SQL);
+
+        $this->preparer()->prepare();
+        $catalog = new Catalog($this->owner());
+
+        $this->assertSame(['tenant_id', 'id'], $catalog->primaryKey(self::SCHEMA, 'authors')['columns']);
+        $this->assertSame(['tenant_id', 'email'], $catalog->uniqueIndexes(self::SCHEMA, 'authors')[0]->keyColumns, 'a unique index a foreign key references follows the key too');
+
+        $definitions = collect($this->owner()->select("select conname, pg_get_constraintdef(oid) as def from pg_constraint where contype = 'f' and connamespace = 'rls_test'::regnamespace"))->pluck('def', 'conname');
+        $this->assertSame('FOREIGN KEY (tenant_id, author_id) REFERENCES authors(tenant_id, id) ON DELETE CASCADE', $definitions['books_author_id_fkey']);
+        $this->assertSame('FOREIGN KEY (tenant_id, author_email) REFERENCES authors(tenant_id, email) ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED', $definitions['books_author_email_fkey']);
+        $this->assertSame('FOREIGN KEY (tenant_id, book_id) REFERENCES books(tenant_id, id) ON DELETE SET NULL (book_id)', $definitions['reviews_book_id_fkey']);
+
+        $this->grantScopedRole();
+        $a = $this->scoped('a');
+        $b = $this->scoped('b');
+        $shared = '01a09827-0000-4000-8000-000000000001';
+
+        // the same id under two keys: a central row copied into two tenants
+        $a->table('authors')->insert(['id' => $shared, 'email' => 'same@example.com']);
+        $b->table('authors')->insert(['id' => $shared, 'email' => 'same@example.com']);
+        $bookId = $a->table('books')->insertGetId(['author_id' => $shared, 'author_email' => 'same@example.com'], 'id');
+        $a->table('reviews')->insert(['book_id' => $bookId]);
+
+        // a reference to another key's row is refused outright, not merely hidden
+        $b->table('authors')->where('id', $shared)->delete();
+        try {
+            $b->table('books')->insert(['author_id' => $shared]);
+            $this->fail('a foreign key must not resolve to another key\'s row');
+        } catch (QueryException $e) {
+            $this->assertStringContainsString('violates foreign key constraint "books_author_id_fkey"', $e->getMessage());
+        }
+
+        // ON DELETE SET NULL clears only its own column: the review keeps its key
+        $a->table('books')->where('id', $bookId)->delete();
+        $review = $this->owner()->table('reviews')->first();
+        $this->assertNull($review->book_id);
+        $this->assertSame('a', $review->tenant_id);
+
+        $second = $this->preparer()->prepare();
+        $this->assertTrue($second->isNoop(), (string) $second);
+        $this->assertTrue($this->coverage()->probe()->complete());
+    }
+
+    public function test_a_foreign_key_into_an_unprepared_table_is_left_alone(): void
+    {
+        $this->owner()->unprepared(<<<'SQL'
+            CREATE TABLE countries (code text PRIMARY KEY);
+            CREATE TABLE addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), country_code text NOT NULL REFERENCES countries(code));
+            SQL);
+
+        $report = $this->preparer(exclude: ['migrations', 'countries'])->prepare();
+
+        $this->assertSame(['code'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'countries')['columns']);
+        $this->assertSame(['tenant_id', 'id'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'addresses')['columns']);
+        $this->assertSame('FOREIGN KEY (country_code) REFERENCES countries(code)', $this->owner()->selectOne("select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'addresses_country_code_fkey'")->def);
+        $this->assertSame([], $report->skippedItems(), 'a central reference is not a skip');
+    }
+
+    public function test_a_key_referenced_from_an_unprepared_table_stays_unique_and_is_reported(): void
+    {
+        $this->owner()->unprepared(<<<'SQL'
+            CREATE TABLE plans (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+            CREATE TABLE plan_audit (id serial PRIMARY KEY, plan_id uuid REFERENCES plans(id));
+            CREATE TABLE subscriptions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), plan_id uuid REFERENCES plans(id));
+            SQL);
+
+        $report = $this->preparer(exclude: ['migrations', 'plan_audit'])->prepare();
+        $catalog = new Catalog($this->owner());
+
+        $this->assertSame(['id'], $catalog->primaryKey(self::SCHEMA, 'plans')['columns']);
+        $skipped = collect($report->skippedItems()['plans'] ?? [])->pluck('reason', 'subject');
+        $this->assertStringContainsString('referenced by foreign key plan_audit_plan_id_fkey on rls_test.plan_audit, which is outside the prepared tables', $skipped['primary key plans_pkey']);
+        $this->assertStringContainsString('the key it references, plans_pkey, cannot be', collect($report->skippedItems()['subscriptions'])->pluck('reason', 'subject')['foreign key subscriptions_plan_id_fkey']);
+
+        $this->assertTrue($this->preparer(exclude: ['migrations', 'plan_audit'])->prepare()->isNoop());
+    }
+
+    public function test_a_foreign_key_with_the_column_on_one_side_only_is_left_as_written(): void
+    {
+        $this->owner()->unprepared(<<<'SQL'
+            CREATE TABLE teams (id text PRIMARY KEY);
+            CREATE TABLE members (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id text REFERENCES teams(id));
             SQL);
 
         $report = $this->preparer()->prepare();
 
-        $skipped = $report->skippedItems()['authors'] ?? [];
-        $this->assertCount(1, $skipped);
-        $this->assertSame('unique index authors_email_key', $skipped[0]['subject']);
-        $this->assertStringContainsString('books_author_email_fkey', $skipped[0]['reason']);
-
-        $index = (new Catalog($this->owner()))->uniqueIndexes(self::SCHEMA, 'authors')[0];
-        $this->assertSame(['email'], $index->keyColumns, 'the referenced index is left as it was');
-        $this->assertStringContainsString('skipped  unique index authors_email_key', (string) $report);
-
-        // everything else on the table was still prepared
-        $this->assertTrue($this->coverage()->probe()->table('authors')->policyCurrent);
+        $this->assertSame(['id'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'teams')['columns']);
+        $this->assertStringContainsString('carries tenant_id on one side only', collect($report->skippedItems()['teams'])->pluck('reason', 'subject')['primary key teams_pkey']);
         $this->assertTrue($this->preparer()->prepare()->isNoop());
+        $this->assertTrue($this->coverage()->probe()->complete(), (string) $this->coverage()->probe());
+    }
+
+    public function test_a_primary_key_a_view_depends_on_is_left_unique_and_reported(): void
+    {
+        $this->owner()->unprepared(<<<'SQL'
+            CREATE TABLE authors (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL);
+            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_id uuid NOT NULL);
+            CREATE VIEW author_book_counts AS SELECT a.id, a.name, count(b.id) FROM authors a LEFT JOIN books b ON b.author_id = a.id GROUP BY a.id;
+            SQL);
+
+        $report = $this->preparer()->prepare();
+
+        $this->assertSame(['id'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'authors')['columns']);
+        $this->assertStringContainsString('view author_book_counts depends on it', collect($report->skippedItems()['authors'])->pluck('reason', 'subject')['primary key authors_pkey']);
+        $this->assertSame(['tenant_id', 'id'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'books')['columns']);
+        $this->assertTrue($this->coverage()->probe()->complete());
+    }
+
+    public function test_an_existing_cross_key_reference_refuses_the_rewrite_and_applies_nothing(): void
+    {
+        $this->owner()->unprepared(<<<'SQL'
+            CREATE TABLE posts (id uuid PRIMARY KEY, tenant_id text NOT NULL DEFAULT current_setting('app.tenant_id'));
+            CREATE TABLE comments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id text NOT NULL DEFAULT current_setting('app.tenant_id'), post_id uuid REFERENCES posts(id));
+            INSERT INTO posts (id, tenant_id) VALUES ('01a09827-0000-4000-8000-000000000002', 'a');
+            INSERT INTO comments (tenant_id, post_id) VALUES ('b', '01a09827-0000-4000-8000-000000000002');
+            SQL);
+
+        try {
+            $this->preparer()->prepare();
+            $this->fail('re-adding the scoped foreign key over a cross-key reference must fail');
+        } catch (QueryException $e) {
+            $this->assertStringContainsString('comments_post_id_fkey', $e->getMessage());
+        }
+
+        $this->assertSame(['id'], (new Catalog($this->owner()))->primaryKey(self::SCHEMA, 'posts')['columns'], 'one transaction: nothing applied');
+        $this->assertSame([], $this->owner()->select("select 1 from pg_policies where schemaname = 'rls_test'"));
     }
 
     public function test_an_outdated_policy_is_replaced_when_the_body_changes(): void

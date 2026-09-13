@@ -11,7 +11,9 @@ final class TableCoverage
      * @param  bool  $policyPresent  a policy carrying this package's suffix exists on the table
      * @param  bool  $policyCurrent  the policy named for the CURRENT column and setting exists
      * @param  list<string>  $uncoveredUniqueIndexes  unique indexes whose key columns lack the column and that the preparer would rewrite
-     * @param  list<string>  $foreignKeyBackedUniqueIndexes  unique indexes lacking the column that a foreign key references — the preparer skips these, so they are reported but do not make the table incomplete
+     * @param  ?string  $uncoveredPrimaryKey  the primary key's name when it lacks the column and the preparer would rewrite it
+     * @param  list<string>  $uncoveredForeignKeys  foreign keys on this table into a prepared table that lack the column and that the preparer would rewrite
+     * @param  list<string>  $unrewritableKeys  keys lacking the column that the preparer cannot rewrite, each with why — reported, but they do not make the table incomplete
      */
     public function __construct(
         public readonly string $table,
@@ -21,7 +23,9 @@ final class TableCoverage
         public readonly bool $policyCurrent,
         public readonly bool $columnPresentWithDefault,
         public readonly array $uncoveredUniqueIndexes,
-        public readonly array $foreignKeyBackedUniqueIndexes,
+        public readonly ?string $uncoveredPrimaryKey = null,
+        public readonly array $uncoveredForeignKeys = [],
+        public readonly array $unrewritableKeys = [],
     ) {}
 
     public function uniqueIndexesCovered(): bool
@@ -54,6 +58,14 @@ final class TableCoverage
 
         if ($this->uncoveredUniqueIndexes !== []) {
             $problems[] = 'unique index(es) lacking the column: '.implode(', ', $this->uncoveredUniqueIndexes);
+        }
+
+        if ($this->uncoveredPrimaryKey !== null) {
+            $problems[] = 'primary key lacking the column: '.$this->uncoveredPrimaryKey;
+        }
+
+        if ($this->uncoveredForeignKeys !== []) {
+            $problems[] = 'foreign key(s) lacking the column: '.implode(', ', $this->uncoveredForeignKeys);
         }
 
         return $problems;

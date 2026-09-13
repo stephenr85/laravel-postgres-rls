@@ -61,8 +61,8 @@ final class CoverageReport implements Stringable
                 $lines[] = '    note: row level security is FORCEd although force is off; the owner is subject to the policy here';
             }
 
-            foreach ($table->foreignKeyBackedUniqueIndexes as $index) {
-                $lines[] = sprintf('    note: unique index %s lacks the column but backs a foreign key; left as is', $index);
+            foreach ($table->unrewritableKeys as $key) {
+                $lines[] = sprintf('    note: %s lacks the column and cannot be rewritten; left as is', $key);
             }
         }
 

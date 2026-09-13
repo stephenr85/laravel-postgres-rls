@@ -75,17 +75,27 @@ class CoverageAuditTest extends AuditTestCase
         $this->assertFinding(DoctorStatus::Fail, 'posts: row level security not forced', $this->audit(force: true)->run()[0]);
     }
 
-    public function test_a_foreign_key_backed_unique_index_is_noted_not_failed(): void
+    public function test_a_key_the_preparer_cannot_rewrite_is_noted_not_failed(): void
     {
         $this->owner()->unprepared(<<<'SQL'
             CREATE TABLE authors (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text NOT NULL UNIQUE);
-            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_email text NOT NULL REFERENCES authors(email));
+            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_email text REFERENCES authors(email) MATCH FULL);
             SQL);
         $this->preparer()->prepare();
 
         $finding = $this->audit()->run()[0];
 
-        $this->assertFinding(DoctorStatus::Pass, 'Unique indexes the preparer cannot rewrite: authors.authors_email_key', $finding);
+        $this->assertFinding(DoctorStatus::Pass, 'Keys the preparer cannot rewrite (left unique across keys): authors: unique index authors_email_key', $finding);
+        $this->assertStringContainsString('books: foreign key books_author_email_fkey', $finding->detail);
+    }
+
+    public function test_a_primary_key_lacking_the_column_fails(): void
+    {
+        $this->createSpikeTables();
+        $this->preparer()->prepare();
+        $this->owner()->unprepared('ALTER TABLE comments DROP CONSTRAINT comments_pkey; ALTER TABLE comments ADD CONSTRAINT comments_pkey PRIMARY KEY (id)');
+
+        $this->assertFinding(DoctorStatus::Fail, 'comments: primary key lacking the column: comments_pkey', $this->audit()->run()[0]);
     }
 
     public function test_nothing_to_measure_is_inconclusive_not_clean(): void

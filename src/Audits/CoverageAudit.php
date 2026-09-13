@@ -12,7 +12,8 @@ use Throwable;
  * **Question:** is every base table in each prepared schema in the state `prepare()` leaves it —
  * RLS enabled (and forced, when `force` is on; a table forced while `force` is off is strictly
  * safer and is noted, not failed), the current policy present, the discriminator column present
- * with its default, every unique index carrying the column?
+ * with its default, every unique index and primary key carrying the column, and every foreign key
+ * between prepared tables carrying it on both sides?
  *
  * One finding per schema. **Gate-shaped: a Fail is a table that can leak.** A table that shipped
  * without a policy is readable across keys by any scoped connection, which is the defect this map
@@ -21,8 +22,8 @@ use Throwable;
  * **What a Pass does NOT prove.** Nothing about which role reads the schema — the owner reads every
  * row with `force` off and a superuser always does (see {@see RoleAudit}, {@see OwnerExposureAudit});
  * nothing about whether the connector applied the setting at runtime ({@see FrameAudit}); nothing
- * about a unique index a foreign key references — those are skipped by the preparer, reported here
- * in the detail, and counted as covered because the preparer cannot rewrite them. And nothing about
+ * about a key the preparer cannot rewrite (a foreign key into it from an unprepared table, MATCH FULL,
+ * ON UPDATE SET NULL) — those are reported here in the detail and counted as covered. And nothing about
  * schemas not named in the scope: an unlisted pooled schema is not measured. An empty scope, or a
  * schema with no tables in it, is `inconclusive`, not clean.
  *
@@ -84,17 +85,17 @@ final class CoverageAudit implements DoctorAudit
                 $forced[] = $table->table;
             }
 
-            foreach ($table->foreignKeyBackedUniqueIndexes as $index) {
-                $notes[] = sprintf('%s.%s (referenced by a foreign key; left unique across keys)', $table->table, $index);
+            foreach ($table->unrewritableKeys as $key) {
+                $notes[] = sprintf('%s: %s', $table->table, $key);
             }
         }
 
-        $noteText = $notes === [] ? '' : ' Unique indexes the preparer cannot rewrite: '.implode(', ', $notes).'.';
+        $noteText = $notes === [] ? '' : ' Keys the preparer cannot rewrite (left unique across keys): '.implode(', ', $notes).'.';
         $noteText .= $forced === [] ? '' : sprintf(' %d table(s) are FORCEd although force is off (strictly safer; the owner is subject there): %s.', count($forced), implode(', ', $forced));
 
         if ($report->complete()) {
             return Finding::pass(self::CHECK, sprintf(
-                'Schema "%s": all %d table(s) carry the column with its default, row level security enabled%s, and the current policy; every rewritable unique index leads with the column.%s',
+                'Schema "%s": all %d table(s) carry the column with its default, row level security enabled%s, and the current policy; every rewritable unique index, primary key and foreign key carries the column.%s',
                 $schema,
                 count($report->tables),
                 $this->scope->force ? ' and forced' : '',

@@ -33,6 +33,15 @@ return [
     'force' => false,
 
     /*
+     * On every connection whose `session_settings` carry a custom (dotted) setting, swap in grammars
+     * that follow the preparer's key rewrites: an upsert whose conflict target names a widened unique
+     * index gets the column prepended, and a migration's new foreign key into a prepared table is
+     * written `(column, …) REFERENCES (column, …)`. Both decided from the catalog. Off only if a host
+     * scopes its own.
+     */
+    'scope_grammars' => true,
+
+    /*
      * What the doctor audits (Rushing\PostgresRls\Audits\*) are pointed at. A host whose scoped
      * connections are assembled at runtime constructs an AuditScope by hand instead.
      */

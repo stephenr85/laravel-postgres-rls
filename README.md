@@ -37,14 +37,36 @@ Four pieces, each usable alone:
 | piece | role |
 | --- | --- |
 | `SessionSettingsPostgresConnector` | a pgsql connector that runs `select set_config(name, value, false)` for every `session_settings` pair after connect — and therefore after every reconnect, because Laravel's `reconnect()` goes back through the connector. Bound at `db.connector.pgsql` by the provider only when nothing else has claimed the key. Works for built-in settings too (`statement_timeout`). |
-| `RowLevelSecurity\SchemaPreparer` | for every base table in a schema: adds the discriminator column (`text NOT NULL DEFAULT current_setting('app.tenant_id')`), a btree index on it, `ENABLE ROW LEVEL SECURITY` (and `FORCE` when configured), the policy `USING (col = current_setting('setting', true)) WITH CHECK (same)`, and rewrites unique indexes to lead with the column. Idempotent; a second run reports zero applied statements. Everything runs in one transaction. |
-| `RowLevelSecurity\Coverage` | read-only: per table, is RLS enabled, forced as expected, the current policy present, the column present with its default, every unique index covered. `complete(): bool` for a doctor or a post-migrate gate. |
+| `RowLevelSecurity\SchemaPreparer` | for every base table in a schema: adds the discriminator column (`text NOT NULL DEFAULT current_setting('app.tenant_id')`), a btree index on it, `ENABLE ROW LEVEL SECURITY` (and `FORCE` when configured), the policy `USING (col = current_setting('setting', true)) WITH CHECK (same)`, and rewrites unique indexes and primary keys to lead with the column and foreign keys between prepared tables to carry it on both sides. Idempotent; a second run reports zero applied statements. Everything runs in one transaction. |
+| `RowLevelSecurity\Coverage` | read-only: per table, is RLS enabled, forced as expected, the current policy present, the column present with its default, every unique index, primary key and foreign key between prepared tables covered. `complete(): bool` for a doctor or a post-migrate gate. |
 | `RowLevelSecurity\RoleGrants` | grants a named non-owner role `USAGE` on the schema, DML on all tables, `USAGE, SELECT` on all sequences, and the same as default privileges for tables and sequences the owner creates later. Never creates the role or sets a password. |
 | `RowLevelSecurity\RoleBinder` | direct access: issues a login role whose default session setting is one key (`ALTER ROLE ... SET`), grants it through `RoleGrants`, and revokes and drops it again. A BI tool connecting as that role sees one key's rows under the same policy with no application in the path. The password is handed out once and never stored or echoed. |
 
 Plus `postgres-rls:prepare {schema}` (options `--connection`, `--column`, `--setting`,
 `--exclude=*`, `--force`) and a publishable `config/postgres-rls.php` holding the defaults:
-column `tenant_id`, setting `app.tenant_id`, exclude `['migrations']`, force `false`.
+column `tenant_id`, setting `app.tenant_id`, exclude `['migrations']`, force `false`,
+`scope_grammars` `true`.
+
+### Code that names only its own columns: upserts and later migrations
+
+The preparer widens keys under code that never names the discriminator. On every connection whose
+`session_settings` carry a custom (dotted) setting, the provider swaps in two grammars (Laravel's or
+`tpetry/laravel-postgresql-enhanced`'s, subclassed; a connection with any other grammar class keeps it):
+
+- **Upserts** (`Query\ScopesConflictTargets`). Postgres infers an `ON CONFLICT (cols)` arbiter only from
+  an index over exactly those columns, so `upsert($rows, ['slug'])` would stop matching `(tenant_id, slug)`.
+  The target gains the column when — read from the catalog, cached per table per connection — the table
+  has a unique index (partial ones included, for `upsertPartial`) over exactly the column plus the target
+  and none over the target alone.
+- **Foreign keys added by later migrations** (`Query\ScopesForeignKeys`). After `prepare()`, nothing unique
+  covers `users(id)` alone, so `foreignId('user_id')->constrained()` would fail. On the migrating connection
+  (bind the key's setting on it, as a pool migration does) the foreign key is written
+  `(tenant_id, user_id) REFERENCES users (tenant_id, id)`, adding the column to the referencing table
+  first; the next `prepare()` finishes the table. A reference into a central or not-yet-prepared table
+  compiles unchanged.
+
+Not covered: tpetry's `insertOrIgnoreReturning($uniqueBy)`, raw `ON CONFLICT` or `REFERENCES` SQL, a
+migration run on a connection with no custom setting bound, and a `RoleBinder` direct connection.
 
 ### Doctor audits
 
@@ -53,7 +75,7 @@ Four `Rushing\Doctor\DoctorAudit` implementations under `Audits\`, bound by the 
 
 | audit | Fails when | shape |
 | --- | --- | --- |
-| `CoverageAudit` | a table in a prepared schema lacks the column, RLS, the current policy, or a rewritable unique index lacks the column | gate |
+| `CoverageAudit` | a table in a prepared schema lacks the column, RLS, the current policy, or a rewritable unique index, primary key or foreign key lacks the column | gate |
 | `RoleAudit` | a connection carrying `session_settings` authenticates as a superuser, a `BYPASSRLS` role, or an owner of the schema or a table in it — the Pass names the role | gate |
 | `OwnerExposureAudit` | a configured connection whose `search_path` reaches a prepared schema authenticates as its owner outside `maintenance_connections`, while any table is unforced | gate |
 | `FrameAudit` | (advisory, Warns) the setting is not bound on a live scoped session, is stale, or is bound on an unscoped one | advisory |
@@ -87,19 +109,31 @@ table — the column is defaulted by the database, so shared migrations need not
 - **Unique means unique per key.** Every unique index whose key columns lack the discriminator is
   re-created under the same name with the column prepended (through `DROP/ADD CONSTRAINT` when a
   `UNIQUE` constraint owns it), so two keys may share a slug.
+- **Keys are per key, and so are references.** Every primary key becomes `(column, …)`, so a row
+  copied from a central table may carry the same id under two keys. Every foreign key between two
+  prepared tables becomes `(column, …) REFERENCES (column, …)`, an `ON DELETE SET NULL` naming its own
+  columns (`SET NULL (col)`, Postgres 15+) so a cascade never clears the discriminator. A reference to
+  another key's row is then refused by Postgres, not merely hidden — and a schema that already holds
+  one fails `prepare()`, which applies nothing.
 
 ## Non-guarantees
 
-- **Foreign-key checks bypass RLS.** A row in key B may reference key A's row by id if B knows the id;
-  Postgres validates FKs as the table owner, outside the policy. Measured in the pooled-storage
-  ticket 01 spike. Do not rely on RLS to stop a guessed-id reference.
+- **Foreign keys the preparer cannot rewrite still bypass RLS.** Postgres validates a foreign key
+  as the table owner, outside the policy (measured in the pooled-storage ticket 01 spike). Between
+  prepared tables the rewrite makes a cross-key reference impossible; a foreign key it leaves alone
+  (see below) does not, nor does one into a table outside the prepared set.
+- **Partitioned tables are not supported.** Partitions and partitioned parents are not exercised by the
+  suite; inherited constraints are ignored by the key rewrite and a parent's `ON ONLY` unique index is
+  reported, not rewritten.
 - **Sequences are schema-global.** A serial id is unique across keys but not contiguous per key, and
   gaps reveal that other keys exist. UUID keys are unaffected.
 - **Backups are schema-granular.** A dump of the schema contains every key's rows; per-key restore
   is a filtered copy, not a restore.
-- **A unique index a foreign key references is not rewritten.** Postgres will not drop it, and the
-  referencing table would need the key in its own FK columns. The preparer skips it and reports
-  it; `Coverage` lists it separately and does not count it against completeness.
+- **A key some foreign key cannot follow is not rewritten.** When a foreign key into a unique index
+  or primary key comes from an unprepared table (excluded, or in another schema), is `MATCH FULL`
+  or `ON UPDATE SET NULL/DEFAULT`, or carries the column on one side only — or a view depends on a
+  primary key — the key stays unique across keys and those foreign keys stay as they are. The preparer reports each; `Coverage` lists them apart and does not count them against
+  completeness.
 - **Populated tables need the setting bound on the preparing connection.** Postgres evaluates an
   `ADD COLUMN` default once at ALTER time and stamps every existing row with it; unbound, the run
   fails at `SET NOT NULL` with "contains null values" and rolls back. Bind the key the existing rows

@@ -37,4 +37,25 @@ final class UniqueIndex
     {
         return $this->referencingForeignKeys !== [];
     }
+
+    /**
+     * The statement that re-creates this index with `$column` leading its keys — the constraint body when a
+     * UNIQUE constraint owns it, else the index definition — or null when the definition is not one this
+     * package can rewrite (then it is reported, by the preparer and by coverage alike).
+     */
+    public function rewrittenDefinition(string $column): ?string
+    {
+        if ($this->backsConstraint()) {
+            return preg_replace('/\(/', '('.$column.', ', (string) $this->constraintDefinition, 1);
+        }
+
+        // `ON ONLY` is a partitioned table's parent index; re-creating it would not reach the partitions.
+        if (str_contains($this->indexDefinition, ' ON ONLY ')) {
+            return null;
+        }
+
+        $rewritten = preg_replace('/ USING (\S+) \(/', ' USING $1 ('.$column.', ', $this->indexDefinition, 1);
+
+        return $rewritten === $this->indexDefinition ? null : $rewritten;
+    }
 }

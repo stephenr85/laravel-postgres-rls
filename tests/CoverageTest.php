@@ -78,19 +78,36 @@ class CoverageTest extends TestCase
         $this->assertFalse($this->coverage()->probe()->complete());
     }
 
-    public function test_a_foreign_key_backed_unique_index_is_noted_but_does_not_block_completeness(): void
+    public function test_unprepared_primary_and_foreign_keys_are_uncovered(): void
+    {
+        $this->createSpikeTables();
+
+        $report = $this->coverage()->probe();
+
+        $this->assertSame('posts_pkey', $report->table('posts')->uncoveredPrimaryKey);
+        $this->assertSame(['comments_post_id_fkey'], $report->table('comments')->uncoveredForeignKeys);
+        $this->assertContains('foreign key(s) lacking the column: comments_post_id_fkey', $report->table('comments')->problems(false));
+
+        $this->preparer()->prepare();
+        $prepared = $this->coverage()->probe();
+        $this->assertNull($prepared->table('posts')->uncoveredPrimaryKey);
+        $this->assertSame([], $prepared->table('comments')->uncoveredForeignKeys);
+    }
+
+    public function test_a_key_the_preparer_cannot_rewrite_is_noted_but_does_not_block_completeness(): void
     {
         $this->owner()->unprepared(<<<'SQL'
             CREATE TABLE authors (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text NOT NULL UNIQUE);
-            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_email text NOT NULL REFERENCES authors(email));
+            CREATE TABLE books (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_email text REFERENCES authors(email) MATCH FULL);
             SQL);
         $this->preparer()->prepare();
 
         $report = $this->coverage()->probe();
 
         $this->assertTrue($report->complete(), (string) $report);
-        $this->assertSame(['authors_email_key'], $report->table('authors')->foreignKeyBackedUniqueIndexes);
         $this->assertSame([], $report->table('authors')->uncoveredUniqueIndexes);
-        $this->assertStringContainsString('note: unique index authors_email_key lacks the column but backs a foreign key', (string) $report);
+        $this->assertCount(1, $report->table('authors')->unrewritableKeys);
+        $this->assertStringContainsString('unique index authors_email_key (referenced by foreign key books_author_email_fkey, which is not rewritten because it is MATCH FULL', $report->table('authors')->unrewritableKeys[0]);
+        $this->assertStringContainsString('note: foreign key books_author_email_fkey', (string) $report);
     }
 }

@@ -193,6 +193,119 @@ final class Catalog
     }
 
     /**
+     * The table's PRIMARY KEY, or null when it has none.
+     *
+     * `views` names the views that depend on the constraint itself — a view may select a column it does not
+     * group by only through the primary key's functional dependency, and Postgres refuses to drop the key
+     * under it.
+     *
+     * @return ?array{name: string, index: string, columns: list<string>, definition: string, views: list<string>}
+     */
+    public function primaryKey(string $schema, string $table): ?array
+    {
+        $row = $this->connection->selectOne(
+            <<<'SQL'
+            select
+                con.conname as name,
+                i.relname as index_name,
+                pg_get_constraintdef(con.oid) as definition,
+                (select json_agg(a.attname order by k.ord)
+                   from unnest(con.conkey) with ordinality as k(attnum, ord)
+                   join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.attnum) as columns,
+                (select json_agg(distinct v.oid::regclass::text)
+                   from pg_depend d
+                   join pg_rewrite r on r.oid = d.objid
+                   join pg_class v on v.oid = r.ev_class
+                   where d.classid = 'pg_rewrite'::regclass and d.refclassid = 'pg_constraint'::regclass and d.refobjid = con.oid) as views
+            from pg_constraint con
+            join pg_class c on c.oid = con.conrelid
+            join pg_namespace n on n.oid = c.relnamespace
+            join pg_class i on i.oid = con.conindid
+            where n.nspname = ? and c.relname = ? and con.contype = 'p' and con.conparentid = 0
+            SQL,
+            [$schema, $table]
+        );
+
+        if ($row === null) {
+            return null;
+        }
+
+        return [
+            'name' => $row->name,
+            'index' => $row->index_name,
+            'columns' => (array) json_decode((string) $row->columns, true),
+            'definition' => $row->definition,
+            'views' => (array) json_decode((string) ($row->views ?? '[]'), true),
+        ];
+    }
+
+    /**
+     * Every FOREIGN KEY with either end in the schema — declared on its tables, or declared elsewhere
+     * and referencing them — sorted by referencing table and name.
+     *
+     * @return list<ForeignKey>
+     */
+    public function foreignKeys(string $schema): array
+    {
+        // `confdelsetcols` (ON DELETE SET NULL (col)) arrived in Postgres 15; older servers have no such column.
+        $deleteSetColumns = (int) $this->connection->selectOne("select current_setting('server_version_num') as v")->v >= 150000
+            ? '(select json_agg(a.attname order by k.ord) from unnest(con.confdelsetcols) with ordinality as k(attnum, ord) join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.attnum)'
+            : 'null';
+
+        $rows = $this->connection->select(
+            <<<SQL
+            select
+                con.conname as name,
+                cn.nspname as schema_name,
+                c.relname as table_name,
+                fn.nspname as referenced_schema,
+                f.relname as referenced_table,
+                i.relname as referenced_index,
+                con.confupdtype as on_update,
+                con.confdeltype as on_delete,
+                con.confmatchtype as match_type,
+                con.condeferrable as deferrable,
+                con.condeferred as deferred,
+                con.convalidated as validated,
+                (select json_agg(a.attname order by k.ord)
+                   from unnest(con.conkey) with ordinality as k(attnum, ord)
+                   join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.attnum) as columns,
+                (select json_agg(a.attname order by k.ord)
+                   from unnest(con.confkey) with ordinality as k(attnum, ord)
+                   join pg_attribute a on a.attrelid = con.confrelid and a.attnum = k.attnum) as referenced_columns,
+                {$deleteSetColumns} as delete_set_columns
+            from pg_constraint con
+            join pg_class c on c.oid = con.conrelid
+            join pg_namespace cn on cn.oid = c.relnamespace
+            join pg_class f on f.oid = con.confrelid
+            join pg_namespace fn on fn.oid = f.relnamespace
+            join pg_class i on i.oid = con.conindid
+            where con.contype = 'f' and con.conparentid = 0 and (cn.nspname = ? or fn.nspname = ?)
+            order by cn.nspname, c.relname, con.conname
+            SQL,
+            [$schema, $schema]
+        );
+
+        return array_map(fn ($row) => new ForeignKey(
+            name: $row->name,
+            schema: $row->schema_name,
+            table: $row->table_name,
+            columns: (array) json_decode((string) $row->columns, true),
+            referencedSchema: $row->referenced_schema,
+            referencedTable: $row->referenced_table,
+            referencedColumns: (array) json_decode((string) $row->referenced_columns, true),
+            onUpdate: $row->on_update,
+            onDelete: $row->on_delete,
+            deleteSetColumns: (array) json_decode((string) ($row->delete_set_columns ?? '[]'), true),
+            matchType: $row->match_type,
+            deferrable: (bool) $row->deferrable,
+            deferred: (bool) $row->deferred,
+            validated: (bool) $row->validated,
+            referencedIndex: $row->referenced_index,
+        ), $rows);
+    }
+
+    /**
      * @return list<string>
      */
     private function indexKeyColumns(int $indexOid, int $keyCount): array

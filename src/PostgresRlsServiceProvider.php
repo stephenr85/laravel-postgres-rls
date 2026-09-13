@@ -2,6 +2,7 @@
 
 namespace Rushing\PostgresRls;
 
+use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Support\ServiceProvider;
 use Rushing\PostgresRls\Audits\AuditScope;
 use Rushing\PostgresRls\Audits\ConnectionConfig;
@@ -10,12 +11,14 @@ use Rushing\PostgresRls\Audits\FrameAudit;
 use Rushing\PostgresRls\Audits\OwnerExposureAudit;
 use Rushing\PostgresRls\Audits\RoleAudit;
 use Rushing\PostgresRls\Console\PrepareCommand;
+use Rushing\PostgresRls\Query\ScopedGrammars;
 
 /**
  * Binds {@see SessionSettingsPostgresConnector} at the container key Laravel's
  * `ConnectionFactory` consults before falling back to its own connector
- * (`db.connector.pgsql`), merges the package config, registers the prepare command, and binds
- * the four doctor audits with their config-derived scope.
+ * (`db.connector.pgsql`), merges the package config, registers the prepare command, binds
+ * the four doctor audits with their config-derived scope, and scopes upsert conflict targets and new foreign keys on
+ * every connection carrying a custom `session_settings` entry ({@see ScopedGrammars}).
  *
  * The connector is bound ONLY when nothing else has claimed the key, so a host that already
  * ships its own pgsql connector keeps it; wrap or extend this class there instead.
@@ -40,6 +43,14 @@ class PostgresRlsServiceProvider extends ServiceProvider
         }
 
         $this->bindAudits();
+
+        // The preparer widened keys under code that names only its own columns: upsert conflict targets and
+        // foreign keys added by later migrations. The scoped grammars put the discriminator back (ticket 11).
+        $this->app['events']->listen(ConnectionEstablished::class, function (ConnectionEstablished $event) {
+            if ($this->app['config']->get('postgres-rls.scope_grammars', true)) {
+                ScopedGrammars::apply($event->connection, (string) $this->app['config']->get('postgres-rls.column', 'tenant_id'));
+            }
+        });
     }
 
     /**

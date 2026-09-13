@@ -20,18 +20,29 @@ use Illuminate\Database\Connection;
  *  4. policy   — `CREATE POLICY <table>_rls_policy_<hash>` with the {@see Policy} body; any
  *                other policy carrying this package's suffix on the table is outdated and is
  *                dropped first.
- *  5. uniques  — every unique index whose key columns lack the column is dropped and
- *                re-created under the same name with the column prepended (through
- *                `DROP/ADD CONSTRAINT` when a UNIQUE constraint owns it). Primary keys are
- *                skipped silently; an index a FOREIGN KEY references is skipped and REPORTED,
- *                because Postgres will not drop it and the referencing table would need the
- *                key in its own FK columns to stay valid.
+ *
+ * Then, across the prepared tables, keys follow the column ({@see KeyPlan}):
+ *
+ *  5. foreign keys — every foreign key between two prepared tables that lacks the column is dropped;
+ *  6. keys         — every unique index and primary key lacking the column is dropped and re-created
+ *                    under the same name with the column prepended (through `DROP/ADD CONSTRAINT` when
+ *                    a constraint owns it), so the same id or natural key may exist under two keys;
+ *  7. foreign keys — the dropped foreign keys are re-added as `(column, …) REFERENCES (column, …)`, an
+ *                    ON DELETE SET NULL/DEFAULT naming its own columns so a cascade never clears the
+ *                    column. A reference to another key's row is then impossible, not just invisible.
+ *
+ * A key some foreign key cannot follow into (from an unprepared table, or MATCH FULL / ON UPDATE SET
+ * NULL) is left unique on its own and REPORTED, as are the foreign keys into it. Foreign keys into
+ * tables outside the prepared set (central tables) are left exactly as they are.
  *
  * Then policies with this package's suffix on tables outside scope are dropped as zombies.
  * Policy naming, hashing and zombie removal follow stancl/tenancy v4's
  * `CreateUserWithRLSPolicies` (prior art, attributed in {@see Policy}).
  *
- * The whole run is one transaction — Postgres DDL is transactional — so a failure applies nothing.
+ * The whole run is one transaction — Postgres DDL is transactional — so a failure applies nothing. That
+ * includes re-adding a foreign key over rows that already reference another key's row: Postgres refuses
+ * the constraint and nothing is applied, which is the cross-key reference the rewrite exists to forbid.
+ * Requires Postgres 15+ for ON DELETE SET NULL (col); older servers fail on such a foreign key.
  *
  * Populated tables: Postgres evaluates an ADD COLUMN default ONCE at ALTER time and stamps every
  * existing row with it (`current_setting` is STABLE, so it takes the fast path and rewrites
@@ -102,6 +113,8 @@ final class SchemaPreparer
             $all = $this->catalog->tables($this->schema);
             $inScope = array_values(array_diff($all, $this->exclude));
 
+            $prepared = [];
+
             foreach ($inScope as $table) {
                 $report->inspected($table);
 
@@ -109,10 +122,34 @@ final class SchemaPreparer
                     continue;
                 }
 
+                $prepared[] = $table;
                 $this->ensureIndex($table, $report);
                 $this->ensureRowSecurity($table, $report);
                 $this->ensurePolicy($table, $report);
-                $this->rewriteUniqueIndexes($table, $report);
+            }
+
+            $plan = KeyPlan::build($this->catalog, $this->schema, $this->column, $prepared);
+
+            foreach ($plan->rewrite as $foreignKey) {
+                $this->apply($report, $foreignKey->table, sprintf('ALTER TABLE %s DROP CONSTRAINT %s', Identifier::qualified($this->schema, $foreignKey->table), Identifier::quote($foreignKey->name)));
+            }
+
+            foreach ($prepared as $table) {
+                foreach ($plan->leftAlone[$table] ?? [] as $name => $reason) {
+                    $report->skipped($table, 'foreign key '.$name, $reason);
+                }
+
+                $this->rewriteUniqueIndexes($table, $plan, $report);
+                $this->rewritePrimaryKey($table, $plan, $report);
+            }
+
+            foreach ($plan->rewrite as $foreignKey) {
+                $this->apply($report, $foreignKey->table, sprintf(
+                    'ALTER TABLE %s ADD CONSTRAINT %s %s',
+                    Identifier::qualified($this->schema, $foreignKey->table),
+                    Identifier::quote($foreignKey->name),
+                    $foreignKey->scopedDefinition($this->column),
+                ));
             }
 
             $this->dropZombiePolicies($inScope, $report);
@@ -254,7 +291,7 @@ final class SchemaPreparer
         }
     }
 
-    private function rewriteUniqueIndexes(string $table, PreparationReport $report): void
+    private function rewriteUniqueIndexes(string $table, KeyPlan $plan, PreparationReport $report): void
     {
         $relation = Identifier::qualified($this->schema, $table);
 
@@ -263,28 +300,28 @@ final class SchemaPreparer
                 continue;
             }
 
+            // The plan dropped every foreign key it will re-add, so one still referencing the index is a
+            // foreign key it could not rewrite.
             if ($index->backsForeignKey()) {
                 $report->skipped($table, 'unique index '.$index->name, sprintf(
-                    'referenced by foreign key %s; not rewritten, so it stays unique across keys',
-                    implode(', ', $index->referencingForeignKeys),
+                    '%s; not rewritten, so it stays unique across keys',
+                    implode('; ', $plan->blockedBecause($index->name) ?: ['referenced by foreign key '.implode(', ', $index->referencingForeignKeys)]),
                 ));
 
                 continue;
             }
 
-            if ($index->backsConstraint()) {
-                $rewritten = preg_replace('/\(/', '('.$this->column.', ', (string) $index->constraintDefinition, 1);
+            $rewritten = $index->rewrittenDefinition($this->column);
 
-                $this->apply($report, $table, sprintf('ALTER TABLE %s DROP CONSTRAINT %s', $relation, Identifier::quote((string) $index->constraintName)));
-                $this->apply($report, $table, sprintf('ALTER TABLE %s ADD CONSTRAINT %s %s', $relation, Identifier::quote((string) $index->constraintName), $rewritten));
+            if ($rewritten === null) {
+                $report->skipped($table, 'unique index '.$index->name, 'definition not understood; not rewritten: '.$index->indexDefinition);
 
                 continue;
             }
 
-            $rewritten = preg_replace('/ USING (\S+) \(/', ' USING $1 ('.$this->column.', ', $index->indexDefinition, 1);
-
-            if ($rewritten === $index->indexDefinition) {
-                $report->skipped($table, 'unique index '.$index->name, 'definition not understood; not rewritten: '.$index->indexDefinition);
+            if ($index->backsConstraint()) {
+                $this->apply($report, $table, sprintf('ALTER TABLE %s DROP CONSTRAINT %s', $relation, Identifier::quote((string) $index->constraintName)));
+                $this->apply($report, $table, sprintf('ALTER TABLE %s ADD CONSTRAINT %s %s', $relation, Identifier::quote((string) $index->constraintName), $rewritten));
 
                 continue;
             }
@@ -292,6 +329,29 @@ final class SchemaPreparer
             $this->apply($report, $table, sprintf('DROP INDEX %s', Identifier::qualified($this->schema, $index->name)));
             $this->apply($report, $table, $rewritten);
         }
+    }
+
+    private function rewritePrimaryKey(string $table, KeyPlan $plan, PreparationReport $report): void
+    {
+        $key = $this->catalog->primaryKey($this->schema, $table);
+
+        if ($key === null || in_array($this->column, $key['columns'], true)) {
+            return;
+        }
+
+        $blocked = $plan->blockedBecause($key['index']);
+
+        if ($blocked !== []) {
+            $report->skipped($table, 'primary key '.$key['name'], implode('; ', $blocked).'; not rewritten, so it stays unique across keys');
+
+            return;
+        }
+
+        $relation = Identifier::qualified($this->schema, $table);
+        $rewritten = preg_replace('/\(/', '('.$this->column.', ', $key['definition'], 1);
+
+        $this->apply($report, $table, sprintf('ALTER TABLE %s DROP CONSTRAINT %s', $relation, Identifier::quote($key['name'])));
+        $this->apply($report, $table, sprintf('ALTER TABLE %s ADD CONSTRAINT %s %s', $relation, Identifier::quote($key['name']), $rewritten));
     }
 
     /**

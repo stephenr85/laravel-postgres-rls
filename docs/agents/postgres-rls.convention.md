@@ -33,13 +33,22 @@ One schema, many keys. Every table carries a `text NOT NULL` discriminator colum
    duplicated, and a policy with the suffix on an excluded table is dropped as a zombie.
 6. **Unique means unique per key.** Every rewritable unique index leads with the column after
    `prepare()`.
+7. **Keys and references are per key.** Every rewritable primary key leads with the column, so the same
+   id may exist under two keys (a central row copied into each). Every foreign key between two prepared
+   tables carries the column on both sides, so a reference to another key's row is refused by Postgres
+   rather than hidden; `ON DELETE SET NULL/DEFAULT` names its own columns and never clears the column.
+   A schema already holding such a reference fails `prepare()` and nothing is applied. Code that names
+   only its own columns keeps working on a scoped connection: upserts get the column in their conflict
+   target, and a later migration's foreign key into a prepared table is written with it on both sides
+   (README, "Code that names only its own columns"). Run migrations on a connection that binds the
+   setting, or those foreign keys fail.
 
 ## The three non-guarantees
 
-1. **Foreign-key checks bypass RLS.** Postgres validates a FOREIGN KEY as the referenced table's
-   owner, outside the policy. Key B can reference key A's row by id if B knows the id, and the
-   referenced row need not be visible to B. Measured (spike check 21). There is no gate; a host that
-   needs cross-key reference to be impossible puts the key into the FK columns itself.
+1. **Foreign keys the preparer did not rewrite bypass RLS.** Postgres validates a FOREIGN KEY as the
+   referenced table's owner, outside the policy (spike check 21). Guarantee 7 closes this between
+   prepared tables; it stays open for a foreign key into an unprepared table and for one the preparer
+   reports as unrewritable (below).
 2. **Sequences are schema-global.** A `serial`/`identity` id is unique across keys but not contiguous
    per key, and a gap reveals that other keys inserted. UUID keys are unaffected. Accepted for the
    base tier; the flagship's census counted 81 serial columns in its shared migration set.
@@ -47,9 +56,12 @@ One schema, many keys. Every table carries a `text NOT NULL` discriminator colum
    a filtered copy under that key's frame, not a restore. Promotion to a schema of its own is the
    upgrade path, not backup.
 
-A fourth limit is operational, not a leak: **a unique index a foreign key references is not
-rewritten** (Postgres will not drop it), so it stays unique across keys. The preparer reports it,
-`Coverage` lists it apart, and the `CoverageAudit` names it in a Pass rather than failing.
+A fourth limit is operational, not a leak: **a key some foreign key cannot follow is not rewritten** —
+a foreign key into it from an unprepared table, one that is `MATCH FULL` or `ON UPDATE SET NULL/DEFAULT`
+(prepending a never-null column would change what either means), one carrying the column on one side only,
+or — for a primary key — a view that depends on it. The key stays unique across keys, the
+preparer reports it with the foreign keys involved, `Coverage` lists it apart, and the `CoverageAudit`
+names it in a Pass rather than failing.
 
 ## Privilege model
 
