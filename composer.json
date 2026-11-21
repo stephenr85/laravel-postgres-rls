@@ -86,13 +86,6 @@
     },
     "repositories": [
         {
-            "type": "path",
-            "url": "../laravel-doctor",
-            "options": {
-                "symlink": true
-            }
-        },
-        {
             "type": "vcs",
             "url": "https://github.com/stephenr85/laravel-doctor.git"
         },
