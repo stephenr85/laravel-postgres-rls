@@ -62,6 +62,17 @@
                 "Schemastud\\",
                 "Stancl\\"
             ]
+        },
+        "splicewire": {
+            "test-full": {
+                "db-env": {
+                    "PG_TEST_DATABASE": "database",
+                    "PG_TEST_HOST": "host",
+                    "PG_TEST_PORT": "port",
+                    "PG_TEST_USERNAME": "username",
+                    "PG_TEST_PASSWORD": "password"
+                }
+            }
         }
     },
     "config": {
