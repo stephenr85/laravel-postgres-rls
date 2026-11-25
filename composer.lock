@@ -7972,7 +7972,7 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/stephenr85/php-package-topology.git",
-                "reference": "258c123d55abb70eb879d175a21814a0222b9e73"
+                "reference": "852c221d11068bf4a7cc5afee6e5b1b72cc12434"
             },
             "require": {
                 "galbar/jsonpath": "^3.0",
@@ -8036,7 +8036,7 @@
                 "substrate",
                 "topology"
             ],
-            "time": "2026-11-21T01:15:16+00:00"
+            "time": "2026-11-25T18:45:08+00:00"
         },
         {
             "name": "sebastian/cli-parser",
