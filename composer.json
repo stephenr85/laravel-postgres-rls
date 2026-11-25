@@ -47,11 +47,16 @@
             ]
         },
         "package-topology": {
-            "because": "A foundation package: the RLS mechanism must be consumable by any host that wants a session setting on a connection, so it requires nothing from the product tiers and nothing from a tenancy framework. The splicewire/laravel-beam-tenancy adapter depends on this package, never the reverse.",
+            "because": "A foundation package: the RLS mechanism must be consumable by any host that wants a session setting on a connection, so it requires nothing from the product tiers and nothing from a tenancy framework, not even as a dev dependency. The splicewire/laravel-beam-tenancy adapter depends on this package, never the reverse.",
             "mustRequire": [
                 "rushing/laravel-doctor"
             ],
             "mustNotRequire": [
+                "splicewire/*",
+                "schemastud/*",
+                "stancl/*"
+            ],
+            "mustNotRequireDev": [
                 "splicewire/*",
                 "schemastud/*",
                 "stancl/*"
